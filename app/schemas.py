@@ -35,3 +35,7 @@ class ExtractResponse(BaseModel):
     findings: list[Finding]
     escalate: bool
     reason: str
+
+class ExtractionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    findings: list[Finding]

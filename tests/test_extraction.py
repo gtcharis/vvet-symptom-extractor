@@ -17,7 +17,7 @@ def test_extracts_valid_findings(monkeypatch):
 
     monkeypatch.setattr(
         "app.extractor.generate_json",
-        lambda prompt: mock_response
+        lambda prompt, **kwargs: mock_response
     )
 
     findings = extract_findings("The cow is not eating properly.")
@@ -40,10 +40,10 @@ def test_rejects_unknown_sign_id(monkeypatch):
 
     monkeypatch.setattr(
         "app.extractor.generate_json",
-        lambda prompt: mock_response
+        lambda prompt, **kwargs: mock_response
     )
 
-    with pytest.raises(ValueError, match="invalid finding"):
+    with pytest.raises(ValueError):
         extract_findings("The cow has a fever.")
 
 
@@ -60,10 +60,10 @@ def test_rejects_invalid_value(monkeypatch):
 
     monkeypatch.setattr(
         "app.extractor.generate_json",
-        lambda prompt: mock_response
+        lambda prompt, **kwargs: mock_response
     )
 
-    with pytest.raises(ValueError, match="invalid finding"):
+    with pytest.raises(ValueError):
         extract_findings("There are ticks on the cow.")
 
 
@@ -80,7 +80,7 @@ def test_rejects_quote_not_in_original_message(monkeypatch):
 
     monkeypatch.setattr(
         "app.extractor.generate_json",
-        lambda prompt: mock_response
+        lambda prompt, **kwargs: mock_response
     )
 
     with pytest.raises(ValueError, match="Evidence quote"):
@@ -90,7 +90,7 @@ def test_rejects_quote_not_in_original_message(monkeypatch):
 def test_returns_empty_list_when_no_signs_found(monkeypatch):
     monkeypatch.setattr(
         "app.extractor.generate_json",
-        lambda prompt: {"findings": []}
+        lambda prompt, **kwargs: {"findings": []}
     )
 
     findings = extract_findings("The cow is behaving normally.")
@@ -116,7 +116,7 @@ def test_prevents_duplicate_signs(monkeypatch):
 
     monkeypatch.setattr(
         "app.extractor.generate_json",
-        lambda prompt: mock_response
+        lambda prompt, **kwargs: mock_response
     )
 
     findings = extract_findings(
@@ -130,18 +130,19 @@ def test_prevents_duplicate_signs(monkeypatch):
 def test_rejects_missing_findings_field(monkeypatch):
     monkeypatch.setattr(
         "app.extractor.generate_json",
-        lambda prompt: {}
+        lambda prompt, **kwargs: {}
     )
 
-    with pytest.raises(ValueError, match="findings list"):
+    with pytest.raises(ValueError):
         extract_findings("The cow is not eating.")
 
 
 def test_provider_prompt_contains_all_approved_signs(monkeypatch):
     captured = {}
 
-    def mock_generate(prompt):
+    def mock_generate(prompt, **kwargs):
         captured["prompt"] = prompt
+        captured["schema"] = kwargs.get("schema")
         return {"findings": []}
 
     monkeypatch.setattr(
@@ -163,3 +164,70 @@ def test_provider_prompt_contains_all_approved_signs(monkeypatch):
         "ticks"
     ]:
         assert sign_id in captured["prompt"]
+
+    assert captured["schema"] is not None
+
+
+def test_identical_duplicate_findings_are_deduplicated(monkeypatch):
+    from app import extractor
+
+    response = {
+        "findings": [
+            {
+                "sign_id": "ticks",
+                "value": "yes",
+                "quote": "many ticks"
+            },
+            {
+                "sign_id": "ticks",
+                "value": "yes",
+                "quote": "many ticks"
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        extractor,
+        "generate_json",
+        lambda *args, **kwargs: response
+    )
+
+    findings = extractor.extract_findings(
+        "There are many ticks on the animal."
+    )
+
+    assert len(findings) == 1
+    assert findings[0].sign_id == "ticks"
+
+
+def test_conflicting_duplicate_findings_are_rejected(monkeypatch):
+    from app import extractor
+
+    response = {
+        "findings": [
+            {
+                "sign_id": "swelling",
+                "value": "yes",
+                "quote": "has swelling"
+            },
+            {
+                "sign_id": "swelling",
+                "value": "no",
+                "quote": "no swelling"
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        extractor,
+        "generate_json",
+        lambda *args, **kwargs: response
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting duplicate findings"
+    ):
+        extractor.extract_findings(
+            "The cow has swelling, but has no swelling."
+        )

@@ -18,22 +18,12 @@ OLLAMA_MODEL = os.getenv(
 )
 
 
-def generate_json(prompt: str) -> dict:
-    """
-    Send a prompt to the configured Ollama model
-    and return its JSON response.
-    """
-
+def generate_json(prompt: str, schema: dict | None = None) -> dict:
     payload = {
         "model": OLLAMA_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "format": "json",
+        "format": schema or "json",
         "options": {
             "temperature": 0,
             "num_ctx": 2048

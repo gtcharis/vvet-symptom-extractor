@@ -24,10 +24,11 @@ The system extracts symptoms; it does not diagnose diseases or prescribe treatme
 | API framework | FastAPI |
 | Data validation | Pydantic |
 | LLM runtime | Ollama |
-| Language model | Qwen2.5 3B |
+| Language model | Qwen 2.5 3B |
 | HTTP client | HTTPX |
 | Testing | Pytest |
 | API testing | FastAPI TestClient |
+| Model response format | JSON schema-constrained output |
 
 The language model runs locally through Ollama, avoiding dependence on a paid external LLM API.
 
@@ -49,6 +50,14 @@ The extractor is restricted to nine approved livestock health signs:
 
 Only approved sign IDs are accepted in the API response.
 
+Each finding is classified as:
+
+- `yes`: The farmer reports the sign.
+- `no`: The farmer explicitly denies the sign or describes its absence.
+- `not_sure`: The farmer expresses uncertainty about the sign.
+
+Signs that are not mentioned are omitted rather than automatically classified as absent.
+
 ## 4. System Architecture
 
 The application separates language understanding, data validation, and escalation logic.
@@ -66,7 +75,7 @@ Extraction Service
 Prompt Construction
       |
       v
-Ollama / Qwen2.5 3B
+Ollama / Qwen 2.5 3B
       |
       v
 Structured JSON Response
@@ -84,23 +93,33 @@ Escalation Rules Engine
 Structured API Response
 ```
 
-### Design decisions
+### Design Decisions
 
-**LLM-based extraction**
+#### LLM-based extraction
 
 The LLM interprets natural-language messages and identifies relevant health signs. This supports informal descriptions and expressions that may not be captured reliably by simple keyword matching.
 
-**Controlled vocabulary**
+The extraction prompt provides the model with the approved health-sign vocabulary and instructions for interpreting reported, denied, and uncertain observations.
+
+The implementation includes guidance for English, Shona, isiNdebele, and code-switching.
+
+#### Controlled vocabulary
 
 The extractor receives a fixed list of approved sign IDs and their descriptions. This limits the output to the assessment's required vocabulary.
 
-**Evidence-based findings**
+Pydantic schemas provide an additional validation layer to reject unsupported identifiers and invalid classification values.
 
-Every finding must include a quotation from the farmer's original message. The application checks that the quotation appears in the original message before accepting the finding.
+#### Evidence-based findings
 
-**Deterministic escalation**
+Every finding must include a quotation from the farmer's original message.
 
-Escalation is handled by ordinary application code rather than delegated to the LLM. This makes the critical decision rules explicit, testable, and predictable.
+The application checks that the normalized quotation appears in the original message before accepting the finding. This helps prevent the model from returning unsupported or paraphrased evidence.
+
+#### Deterministic escalation
+
+Escalation is handled by ordinary application code rather than delegated to the LLM.
+
+This makes the critical decision rules explicit, testable, and predictable.
 
 ## 5. Escalation Rules
 
@@ -114,6 +133,8 @@ A sign classified as `no` does not trigger escalation.
 
 The escalation engine operates independently of the language model.
 
+This separation ensures that the model is responsible for interpreting the farmer's message, while Python enforces the predefined escalation criteria.
+
 ## 6. Project Structure
 
 ```text
@@ -126,6 +147,7 @@ vvet-symptom-extractor/
 │   ├── signs.py
 │   ├── extractor.py
 │   ├── escalation.py
+│   ├── evaluation.py
 │   │
 │   └── llm/
 │       ├── __init__.py
@@ -137,10 +159,17 @@ vvet-symptom-extractor/
 │   ├── test_extraction.py
 │   ├── test_escalation.py
 │   ├── test_evaluation.py
-│   └── evaluation_cases.py
+│   ├── evaluation_cases.py
+│   ├── validation_cases.py
+│   └── test_cases.py
 │
 ├── scripts/
 │   └── run_evaluation.py
+│
+├── evaluation_results/
+│   ├── training_results.json
+│   ├── validation_results.json
+│   └── test_results.json
 │
 ├── .env.example
 ├── .gitignore
@@ -159,13 +188,13 @@ vvet-symptom-extractor/
 ### Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/vvet-symptom-extractor.git
+git clone https://github.com/gtcharis/vvet-symptom-extractor.git
 cd vvet-symptom-extractor
 ```
 
 ### Create a virtual environment
 
-Windows:
+Windows PowerShell:
 
 ```powershell
 python -m venv venv
@@ -186,6 +215,8 @@ Create a `.env` file in the project root:
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:3b
 ```
+
+The `.env` file is excluded from version control. A `.env.example` file is provided as a configuration reference.
 
 ### Download the model
 
@@ -279,22 +310,29 @@ The project includes automated tests for:
 Run the test suite:
 
 ```bash
-pytest -v
+python -m pytest -v
 ```
 
 The test suite uses mocked LLM responses where appropriate, allowing tests to run without downloading a model, requiring an API key, or making external LLM requests.
 
 ## 11. Evaluation Methodology
 
-A small, manually labelled evaluation dataset is maintained in `tests/evaluation_cases.py`.
+The model was evaluated using three manually labelled datasets:
 
-It contains examples covering:
+| Dataset | Purpose | Cases |
+|---|---|---:|
+| Training | Development and prompt evaluation | 65 |
+| Validation | Assessing generalisation | 50 |
+| Test | Final held-out evaluation | 50 |
+| **Total** | | **165** |
+
+The datasets contain examples covering:
 
 - All nine approved health signs.
 - Explicitly denied symptoms.
 - Uncertain symptom descriptions.
 - Multiple symptoms in one message.
-- English and Shona-English expressions.
+- English and local-language expressions, including Shona and isiNdebele.
 
 The evaluation script compares model predictions against expected sign/value pairs and calculates:
 
@@ -306,9 +344,86 @@ The evaluation script compares model predictions against expected sign/value pai
 
 A wrong classification value is counted as both a false positive and a false negative.
 
-The current evaluation examples are development cases, not an official V-Vet dataset or a statistically representative sample. Reported metrics should therefore be interpreted as preliminary indicators rather than evidence of clinical accuracy.
+### Evaluation Results
 
-## 12. Limitations and Future Improvements
+| Metric | Training | Validation | Test |
+|---|---:|---:|---:|
+| Total cases | 65 | 50 | 50 |
+| Successful runs | 63 | 44 | 46 |
+| Failed runs | 2 | 6 | 4 |
+| Exact matches | 54 | 24 | 27 |
+| Exact match rate | 83.08% | 48.00% | 54.00% |
+| Precision | 92.94% | 65.45% | 74.07% |
+| Recall | 89.77% | 63.16% | 66.67% |
+| F1 score | 91.33% | 64.29% | 70.18% |
+
+The final test dataset produced:
+
+- **Precision:** 74.07%
+- **Recall:** 66.67%
+- **F1 score:** 70.18%
+- **Exact match rate:** 54.00%
+- **Successful inference runs:** 46 out of 50
+- **Failed inference runs:** 4 out of 50
+
+Precision, recall, and F1 are calculated over successful extraction runs, while failed runs are reported separately. Exact-match rate uses the total number of dataset cases.
+
+### Interpretation
+
+The model achieved an F1 score of 91.33% on the development dataset, 64.29% on validation, and 70.18% on the final test dataset.
+
+The difference between development and held-out performance indicates a generalisation gap.
+
+The validation and test results show that the model does not interpret all natural-language descriptions consistently. Observed challenges include:
+
+- Some Shona and isiNdebele symptom descriptions.
+- Uncertainty being classified as a definite positive.
+- Messages containing multiple health signs.
+- Distinguishing weakness from inability to stand.
+- Evidence quotations that paraphrase rather than reproduce the original wording.
+- Inference failures caused by invalid evidence quotations.
+
+The evaluation datasets are manually constructed examples rather than a large, statistically representative collection of real farmer reports. The results should therefore be treated as preliminary indicators of extraction performance, not evidence of clinical accuracy.
+
+## 12. Development and Evaluation Environment
+
+The project was developed and evaluated on the following environment:
+
+| Component | Specification |
+|---|---|
+| Operating System | Windows |
+| Processor | Intel Core i7-1165G7, 11th Generation |
+| Memory | 8 GB RAM |
+| Graphics | Intel Integrated Graphics |
+| Python | 3.15.2 |
+| API Framework | FastAPI |
+| LLM Runtime | Ollama 0.40.16 |
+| Language Model | Qwen 2.5 3B |
+| Testing Framework | Pytest |
+| API Testing | FastAPI TestClient / HTTPX |
+
+### Model Configuration
+
+| Configuration | Value |
+|---|---|
+| Model | `qwen2.5:3b` |
+| Runtime | Ollama |
+| Temperature | `0` |
+| Context window | `2048` tokens |
+| Response format | JSON schema-constrained output |
+| Streaming | Disabled |
+| Inference | Local |
+
+### Configuration Rationale
+
+- **Local inference:** Allows the application to run without depending on an external LLM API.
+- **Temperature 0:** Encourages consistent, less variable extraction responses.
+- **JSON schema:** Constrains the model's response to the expected structured output.
+- **Context window 2048:** Keeps the inference configuration modest for the available hardware.
+
+Evaluation runs were performed sequentially to minimise resource contention during local model inference.
+
+## 13. Limitations and Future Improvements
 
 Potential improvements include:
 
@@ -316,14 +431,26 @@ Potential improvements include:
 2. Supporting more Zimbabwean local-language expressions and spelling variations.
 3. Evaluating additional LLMs for extraction accuracy and inference speed.
 4. Improving confidence handling and ambiguous symptom detection.
-5. Introducing structured logging and monitoring.
-6. Adding authentication and rate limiting for production use.
-7. Building a human-review workflow for uncertain findings.
-8. Measuring sign-level detection performance separately from classification-value accuracy.
+5. Investigating evidence quotation and duplicate-finding failures.
+6. Introducing structured logging and monitoring.
+7. Adding authentication and rate limiting for production use.
+8. Building a human-review workflow for uncertain findings.
+9. Measuring sign-level detection performance separately from classification-value accuracy.
+10. Validating the extraction and escalation workflow with veterinary professionals.
 
-## 13. AI Development Assistance
+## 14. AI Development Assistance
 
-AI coding assistance was used during development to support implementation, debugging, test design, and documentation. The architecture, implementation decisions, validation approach, and testing process were reviewed and executed as part of the development work.
+AI coding assistance was used during development to support implementation, debugging, test design, and documentation.
+
+The architecture, implementation decisions, validation approach, and testing process were reviewed and executed as part of the development work.
+
+## 15. Safety Considerations
+
+This project is a symptom extraction and triage-support prototype. It is not a veterinary diagnostic system.
+
+An escalation decision indicates that one or more predefined signs warrant veterinary attention. It does not establish a diagnosis or replace professional assessment.
+
+The model may miss, misinterpret, or incorrectly classify reported signs. The evaluation results demonstrate these limitations. Any real-world deployment should include veterinary oversight, human review, and further validation using representative farmer reports.
 
 ---
 
@@ -331,4 +458,6 @@ AI coding assistance was used during development to support implementation, debu
 **Author:** Godfrey Charis  
 **Language:** Python  
 **API Framework:** FastAPI  
-**LLM Runtime:** Ollama
+**LLM Runtime:** Ollama  
+**Model:** Qwen 2.5 3B  
+**Repository:** https://github.com/gtcharis/vvet-symptom-extractor
