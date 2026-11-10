@@ -461,3 +461,4 @@ The model may miss, misinterpret, or incorrectly classify reported signs. The ev
 **LLM Runtime:** Ollama  
 **Model:** Qwen 2.5 3B  
 **Repository:** https://github.com/gtcharis/vvet-symptom-extractor
+
